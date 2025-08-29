@@ -1,4 +1,4 @@
-# DFCP Google News Hourly Scraper - Lokal Versiyon
+# dfcp-google-news-scraper - Lokal Versiyon 
 
 import json
 import requests

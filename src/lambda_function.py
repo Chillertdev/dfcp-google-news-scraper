@@ -1,5 +1,5 @@
-# Dfcp Google News Hourly Scraper
-# AWS Lambda fonksiyonu 
+# dfcp-google-news-scraper - AWS Lambda Fonksiyonu
+# Google News'ten Türkiye için 6 kategoride son 1 saatteki haberleri çeker ve S3'e kaydeder.
 
 import json
 import boto3
