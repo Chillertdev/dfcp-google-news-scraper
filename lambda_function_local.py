@@ -1,5 +1,5 @@
 # =============================================================================
-# GOOGLE NEWS SCRAPER - LOKAL VERSİYON
+# GOOGLE NEWS SCRAPER - Lokal Versiyon
 # =============================================================================
 
 import json
@@ -15,14 +15,14 @@ from dateutil import parser as date_parser
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 # Logging konfigürasyonu
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Lokal kayıt dizini - proje ana dizininde 'data' klasörü oluştur
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-    logger.info(f"'{DATA_DIR}' klasörü oluşturuldu")
+# Lokal dosya kaydetme için dizin
+OUTPUT_DIR = "scraped_news"
 
 # Google News RSS URL'leri - Türkiye için 6 kategori
 NEWS_CATEGORIES = {
@@ -33,6 +33,13 @@ NEWS_CATEGORIES = {
     "eglence": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNREpxYW5RU0FtVnVHZ0pKVGlnQVAB?hl=tr&gl=TR&ceid=TR:tr",
     "saglik": "https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ?hl=tr&gl=TR&ceid=TR:tr"
 }
+
+
+def create_output_directory():
+    """Çıktı dizinini oluştur"""
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        logger.info(f"Çıktı dizini oluşturuldu: {OUTPUT_DIR}")
 
 
 def is_within_last_hour(published_date_str):
@@ -177,21 +184,21 @@ def scrape_category(category_name, rss_url):
 
 def save_to_json(data, filename):
     """
-    Veriyi lokal dosyaya JSON formatında kaydeder.
+    Veriyi JSON dosyası olarak kaydet
     
     Args:
         data: Kaydedilecek veri
         filename: Dosya adı
+    
+    Returns:
+        bool: Başarılıysa True
     """
     try:
-        file_path = os.path.join(DATA_DIR, filename)
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
+        filepath = os.path.join(OUTPUT_DIR, filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
-        
-        logger.info(f"Veriler kaydedildi: {file_path}")
+        logger.info(f"Dosya kaydedildi: {filepath}")
         return True
-        
     except Exception as e:
         logger.error(f"Dosya kaydetme hatası: {e}")
         return False
@@ -199,9 +206,12 @@ def save_to_json(data, filename):
 
 def main():
     """
-    Ana fonksiyon. Tüm kategorileri işleyip lokal dosyaya kaydeder.
+    Ana fonksiyon. Tüm kategorileri işleyip JSON dosyasına kaydeder.
     """
-    logger.info("Google News scraper başlatıldı (lokal versiyon)")
+    logger.info("Google News Scraper başlatıldı")
+    
+    # Çıktı dizinini oluştur
+    create_output_directory()
     
     # Tüm kategorilerin verilerini toplayacak ana veri yapısı
     all_scraped_data = {
@@ -210,33 +220,17 @@ def main():
     }
     
     successful_categories = 0  # Başarılı kategori sayacı
-    total_articles = 0  # Toplam haber sayısı
     
     # Her kategori için haberleri çek
     for category_name, rss_url in NEWS_CATEGORIES.items():
-        print(f"\n{'='*50}")
-        print(f"İşleniyor: {category_name.upper()}")
-        print(f"{'='*50}")
-        
         articles = scrape_category(category_name, rss_url)
         all_scraped_data["categories"][category_name] = articles
         
         # Eğer bu kategoriden haber geldiyse başarılı sayacını artır
         if articles:
             successful_categories += 1
-            total_articles += len(articles)
-            
-            # Her kategori için ayrı log
-            print(f"✓ {category_name}: {len(articles)} haber bulundu")
-        else:
-            print(f"✗ {category_name}: Haber bulunamadı")
     
-    # Özet bilgileri
-    print(f"\n{'='*60}")
-    print(f"SCRAPING TAMAMLANDI")
-    print(f"{'='*60}")
-    print(f"Başarılı kategoriler: {successful_categories}/{len(NEWS_CATEGORIES)}")
-    print(f"Toplam haber sayısı: {total_articles}")
+    logger.info(f"{successful_categories}/{len(NEWS_CATEGORIES)} kategori başarılı")
     
     # En az bir kategori başarılıysa dosyaya kaydet
     if successful_categories > 0:
@@ -246,43 +240,35 @@ def main():
         
         # JSON dosyasına kaydet
         if save_to_json(all_scraped_data, filename):
-            print(f"✓ Veriler başarıyla kaydedildi: data/{filename}")
+            logger.info("✅ Tüm veriler başarıyla kaydedildi!")
+            
+            # Özet bilgi yazdır
+            total_articles = sum(len(articles) for articles in all_scraped_data["categories"].values())
+            logger.info(f"📊 Toplam {total_articles} adet son 1 saat içindeki haber kaydedildi")
+            
+            # Kategori bazında özet
+            for category, articles in all_scraped_data["categories"].items():
+                if articles:
+                    logger.info(f"  📰 {category.upper()}: {len(articles)} haber")
         else:
-            print("✗ Dosya kaydetme hatası!")
+            logger.error("❌ Dosya kaydetme başarısız!")
+            return False
     else:
-        print("✗ Hiçbir kategoriden veri alınamadı!")
-    
-    print(f"{'='*60}\n")
-
-
-# Gerekli kütüphaneleri kontrol et
-def check_dependencies():
-    """Gerekli Python kütüphanelerinin yüklü olup olmadığını kontrol eder."""
-    required_packages = ['requests', 'beautifulsoup4', 'python-dateutil']
-    missing_packages = []
-    
-    for package in required_packages:
-        try:
-            if package == 'beautifulsoup4':
-                import bs4
-            elif package == 'python-dateutil':
-                import dateutil
-            else:
-                __import__(package)
-        except ImportError:
-            missing_packages.append(package)
-    
-    if missing_packages:
-        print(f"⚠️  Eksik kütüphaneler: {', '.join(missing_packages)}")
-        print(f"Yüklemek için: pip install {' '.join(missing_packages)}")
+        logger.warning("⚠️ Hiçbir kategori çekilemedi")
         return False
     
     return True
 
 
 if __name__ == "__main__":
-    # Kütüphane kontrolü yap
-    if check_dependencies():
-        main()
-    else:
-        print("Lütfen önce eksik kütüphaneleri yükleyin!")
+    try:
+        success = main()
+        if success:
+            print("\n🎉 Scraping tamamlandı! Veriler 'scraped_news' klasörüne kaydedildi.")
+        else:
+            print("\n❌ Scraping başarısız!")
+    except KeyboardInterrupt:
+        logger.info("⏹️ Kullanıcı tarafından durduruldu")
+    except Exception as e:
+        logger.error(f"💥 Beklenmeyen hata: {e}")
+        print(f"\n❌ Hata oluştu: {e}")
