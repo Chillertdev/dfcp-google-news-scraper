@@ -1,8 +1,8 @@
-# =============================================================================
-# GOOGLE NEWS SCRAPER - Lokal Versiyon
-# =============================================================================
+# Dfcp Google News Hourly Scraper
+# AWS Lambda fonksiyonu 
 
 import json
+import boto3
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from datetime import datetime, timezone
@@ -15,14 +15,12 @@ from dateutil import parser as date_parser
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 # Logging konfigürasyonu
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-# Lokal dosya kaydetme için dizin
-OUTPUT_DIR = "scraped_news"
+# AWS S3 konfigürasyonu
+S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'dfcp-scraped-bucket')
+s3_client = boto3.client('s3')
 
 # Google News RSS URL'leri - Türkiye için 6 kategori
 NEWS_CATEGORIES = {
@@ -33,13 +31,6 @@ NEWS_CATEGORIES = {
     "eglence": "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNREpxYW5RU0FtVnVHZ0pKVGlnQVAB?hl=tr&gl=TR&ceid=TR:tr",
     "saglik": "https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNR3QwTlRFU0FtVnVLQUFQAQ?hl=tr&gl=TR&ceid=TR:tr"
 }
-
-
-def create_output_directory():
-    """Çıktı dizinini oluştur"""
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-        logger.info(f"Çıktı dizini oluşturuldu: {OUTPUT_DIR}")
 
 
 def is_within_last_hour(published_date_str):
@@ -182,36 +173,18 @@ def scrape_category(category_name, rss_url):
         return []  # Hata durumunda boş liste döndür
 
 
-def save_to_json(data, filename):
+def lambda_handler(event, context):
     """
-    Veriyi JSON dosyası olarak kaydet
+    AWS Lambda ana fonksiyonu. Tüm kategorileri işleyip S3'e kaydeder.
     
     Args:
-        data: Kaydedilecek veri
-        filename: Dosya adı
+        event: Lambda event objesi
+        context: Lambda context objesi
     
     Returns:
-        bool: Başarılıysa True
+        dict: HTTP response formatında sonuç
     """
-    try:
-        filepath = os.path.join(OUTPUT_DIR, filename)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        logger.info(f"Dosya kaydedildi: {filepath}")
-        return True
-    except Exception as e:
-        logger.error(f"Dosya kaydetme hatası: {e}")
-        return False
-
-
-def main():
-    """
-    Ana fonksiyon. Tüm kategorileri işleyip JSON dosyasına kaydeder.
-    """
-    logger.info("Google News Scraper başlatıldı")
-    
-    # Çıktı dizinini oluştur
-    create_output_directory()
+    logger.info("Lambda başlatıldı")
     
     # Tüm kategorilerin verilerini toplayacak ana veri yapısı
     all_scraped_data = {
@@ -232,43 +205,47 @@ def main():
     
     logger.info(f"{successful_categories}/{len(NEWS_CATEGORIES)} kategori başarılı")
     
-    # En az bir kategori başarılıysa dosyaya kaydet
+    # En az bir kategori başarılıysa S3'e kaydet
     if successful_categories > 0:
         # Dosya adı için timestamp oluştur
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"google_news_{timestamp}.json"
+        file_name = f"google_news_{timestamp}.json"
         
-        # JSON dosyasına kaydet
-        if save_to_json(all_scraped_data, filename):
-            logger.info("✅ Tüm veriler başarıyla kaydedildi!")
+        try:
+            # S3 bucket'ının var olup olmadığını kontrol et
+            s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
             
-            # Özet bilgi yazdır
-            total_articles = sum(len(articles) for articles in all_scraped_data["categories"].values())
-            logger.info(f"📊 Toplam {total_articles} adet son 1 saat içindeki haber kaydedildi")
+            # Veriyi JSON formatına çevir (Türkçe karakterleri koru)
+            json_data = json.dumps(all_scraped_data, indent=4, ensure_ascii=False)
             
-            # Kategori bazında özet
-            for category, articles in all_scraped_data["categories"].items():
-                if articles:
-                    logger.info(f"  📰 {category.upper()}: {len(articles)} haber")
-        else:
-            logger.error("❌ Dosya kaydetme başarısız!")
-            return False
-    else:
-        logger.warning("⚠️ Hiçbir kategori çekilemedi")
-        return False
+            # S3'e yükle
+            s3_client.put_object(
+                Bucket=S3_BUCKET_NAME,
+                Key=file_name,
+                Body=json_data,
+                ContentType='application/json'
+            )
+            
+            logger.info(f"S3'e kaydedildi: {file_name}")
+            
+            # Başarılı response döndür
+            return {
+                'statusCode': 200,
+                'body': json.dumps('Veriler başarıyla kaydedildi')
+            }
+            
+        except Exception as e:
+            logger.error(f"S3 hatası: {e}")
+            # S3 hatası durumunda 500 döndür
+            return {
+                'statusCode': 500,
+                'body': json.dumps('S3 yükleme hatası')
+            }
     
-    return True
-
-
-if __name__ == "__main__":
-    try:
-        success = main()
-        if success:
-            print("\n🎉 Scraping tamamlandı! Veriler 'scraped_news' klasörüne kaydedildi.")
-        else:
-            print("\n❌ Scraping başarısız!")
-    except KeyboardInterrupt:
-        logger.info("⏹️ Kullanıcı tarafından durduruldu")
-    except Exception as e:
-        logger.error(f"💥 Beklenmeyen hata: {e}")
-        print(f"\n❌ Hata oluştu: {e}")
+    else:
+        # Hiçbir kategoriden veri gelmedi
+        logger.warning("Hiçbir kategori çekilemedi")
+        return {
+            'statusCode': 500,
+            'body': json.dumps('Veri çekilemedi')
+        }
