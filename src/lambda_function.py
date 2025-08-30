@@ -1,15 +1,13 @@
-# dfcp-google-news-scraper - AWS Lambda Fonksiyonu
-# Google News'ten Türkiye için 6 kategoride son 1 saatteki haberleri çeker ve S3'e kaydeder.
-
 import json
 import boto3
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import os
 import warnings
 from dateutil import parser as date_parser
+import re
 
 # BeautifulSoup XML uyarılarını gizle
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -36,23 +34,29 @@ NEWS_CATEGORIES = {
 def is_within_last_hour(published_date_str):
     """
     Haberin yayınlanma tarihinin son 1 saat içinde olup olmadığını kontrol eder.
+    Google News RSS tarih formatını doğru şekilde parse eder.
     
     Args:
-        published_date_str: RSS'den gelen tarih string'i
+        published_date_str: RSS'den gelen tarih string'i (örn: "Fri, 29 Aug 2025 03:51:00 GMT")
     
     Returns:
         bool: Son 1 saat içindeyse True, değilse False
     """
     if not published_date_str:
+        logger.warning("Yayın tarihi boş")
         return False
         
     try:
         # RSS tarih formatını Python datetime objesine dönüştür
+        # Google News genellikle "Fri, 29 Aug 2025 03:51:00 GMT" formatı kullanır
         pub_date = date_parser.parse(published_date_str)
         
         # Eğer timezone bilgisi yoksa UTC olarak varsay
         if pub_date.tzinfo is None:
             pub_date = pub_date.replace(tzinfo=timezone.utc)
+        else:
+            # Timezone'u UTC'ye çevir
+            pub_date = pub_date.astimezone(timezone.utc)
         
         # Şu anki zamanı UTC olarak al
         now_utc = datetime.now(timezone.utc)
@@ -60,31 +64,89 @@ def is_within_last_hour(published_date_str):
         # İki zaman arasındaki farkı saniye olarak hesapla
         time_diff = (now_utc - pub_date).total_seconds()
         
-        # Son 1 saat içindeyse True döndür (0 ile 3600 saniye arası)
-        return 0 <= time_diff <= 3600
+        
+        # TEST: 6 saat aralığı ile test (normal: 3600 saniye = 1 saat)
+        # Negatif değerler gelecekteki haberleri temsil eder (saat farkı vb.)
+        return -300 <= time_diff <= 3600  # 5 dakika gelecek toleransı + 6 saat geçmiş
         
     except Exception as e:
-        logger.warning(f"Tarih parse hatası: {e}")
+        logger.warning(f"Tarih parse hatası ({published_date_str}): {e}")
         return False
+
+
+def extract_article_data(item):
+    """
+    RSS item'ından haber verilerini çıkarır.
+    """
+    try:
+        # Haber başlığını çıkar
+        title_element = item.find('title')
+        if not title_element:
+            return None
+            
+        full_title = title_element.get_text(strip=True)
+        
+        # Başlık formatı genellikle "Haber Başlığı - Kaynak Adı" şeklindedir
+        if ' - ' in full_title:
+            title_parts = full_title.rsplit(' - ', 1)  # Son - işaretinden böl
+            title = title_parts[0].strip()
+            source = title_parts[1].strip()
+        else:
+            # Eğer - yoksa tüm başlık title olur, source'u ayrı etiket olarak ara
+            title = full_title
+            source_element = item.find('source')
+            source = source_element.get_text(strip=True) if source_element else "Bilinmiyor"
+        
+        # Yayınlanma tarihini çıkar
+        pub_date_element = item.find('pubdate')
+        published_date = pub_date_element.get_text(strip=True) if pub_date_element else None
+        
+        # Haber URL'ini ve açıklamasını çıkar
+        description_element = item.find('description')
+        description_text = description_element.get_text(strip=True) if description_element else ""
+        
+        # Description içinde HTML var, onu da parse et
+        description_html = BeautifulSoup(description_text, 'html.parser')
+        link_tag = description_html.find('a')  # İlk link'i bul
+        
+        # URL'i önce description'daki link'ten, sonra link elementinden almaya çalış
+        link_element = item.find('link')
+        if link_tag and link_tag.get('href'):
+            url = link_tag['href']
+        elif link_element:
+            url = link_element.get_text(strip=True)
+        else:
+            url = ""
+        
+        # Kısa açıklama metni
+        short_description = link_tag.get_text(strip=True) if link_tag else ""
+        
+        return {
+            'title': title,
+            'url': url,
+            'short_description': short_description,
+            'source': source,
+            'published_date': published_date
+        }
+        
+    except Exception as e:
+        logger.warning(f"Haber verisi çıkarılırken hata: {e}")
+        return None
 
 
 def scrape_category(category_name, rss_url):
     """
     Belirli bir haber kategorisinden tüm haberleri çeker ve son 1 saatteki haberleri filtreler.
     Google'ın orijinal haber sırasını korur.
-    
-    Args:
-        category_name: Kategori adı (örn: "dunya", "spor")
-        rss_url: Google News RSS URL'i
-    
-    Returns:
-        list: Son 1 saat içindeki haberlerin listesi
     """
     
     try:
         # HTTP request için gerekli header'lar
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/rss+xml, application/xml, text/xml',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+            'Cache-Control': 'no-cache'
         }
         
         logger.info(f"Kategori çekiliyor: {category_name}")
@@ -93,80 +155,38 @@ def scrape_category(category_name, rss_url):
         response = requests.get(rss_url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        # XML içeriğini BeautifulSoup ile parse et
+        logger.info(f"{category_name} RSS response alındı, boyut: {len(response.content)} bytes")
+        
+        # XML içeriğini BeautifulSoup ile parse et (html.parser Lambda'da varsayılan olarak mevcut)
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Tüm haber itemlarını al (limit yok, tüm haberleri çek)
+        # Tüm haber itemlarını al
         items = soup.find_all('item')
+        logger.info(f"{category_name} toplam {len(items)} haber bulundu")
         
         # Son 1 saat içindeki haberleri topla
         filtered_articles = []
+        all_articles = []  # Debug için tüm haberler
         
         for index, item in enumerate(items):
-            try:
-                # Haber başlığını çıkar
-                title_element = item.find('title')
-                if not title_element:
-                    continue  # Başlık yoksa bu haberi atla
-                    
-                full_title = title_element.get_text(strip=True)
+            article_data = extract_article_data(item)
+            if not article_data:
+                continue
                 
-                # Başlık formatı genellikle "Haber Başlığı - Kaynak Adı" şeklindedir
-                if ' - ' in full_title:
-                    title_parts = full_title.rsplit(' - ', 1)  # Son - işaretinden böl
-                    title = title_parts[0]
-                    source = title_parts[1]
-                else:
-                    # Eğer - yoksa tüm başlık title olur, source'u ayrı etiket olarak ara
-                    title = full_title
-                    source_element = item.find('source')
-                    source = source_element.get_text(strip=True) if source_element else "Bilinmiyor"
-                
-                # Haber URL'ini ve açıklamasını çıkar
-                description_element = item.find('description')
-                description_text = description_element.get_text(strip=True) if description_element else ""
-                
-                # Description içinde HTML var, onu da parse et
-                description_html = BeautifulSoup(description_text, 'html.parser')
-                link_tag = description_html.find('a')  # İlk link'i bul
-                
-                # URL'i önce description'daki link'ten, sonra link elementinden almaya çalış
-                link_element = item.find('link')
-                if link_tag and link_tag.get('href'):
-                    url = link_tag['href']
-                elif link_element:
-                    url = link_element.get_text(strip=True)
-                else:
-                    url = ""
-                
-                # Yayınlanma tarihini çıkar
-                pub_date_element = item.find('pubdate')
-                published_date = pub_date_element.get_text(strip=True) if pub_date_element else None
-                
-                # ÖNEMLİ: Önce son 1 saat kontrolü yap, sonra listeye ekle
-                if is_within_last_hour(published_date):
-                    article_data = {
-                        'title': title,
-                        'url': url,
-                        'short_description': link_tag.get_text(strip=True) if link_tag else "",
-                        'source': source,
-                        'published_date': published_date
-                    }
-                    filtered_articles.append(article_data)
-                
-            except Exception as item_error:
-                logger.warning(f"Haber işlenirken hata - {category_name}: {item_error}")
-                continue  # Bu haberde hata varsa bir sonrakine geç
+            all_articles.append(article_data)  
+            
+            # Son 1 saat kontrolü yap
+            if is_within_last_hour(article_data['published_date']):
+                article_data['rank'] = len(filtered_articles) + 1  # Rank ekle
+                filtered_articles.append(article_data)
+                logger.info(f"✓ {category_name} - Son 1 saatte: {article_data['title'][:50]}...")
+            #else:
+                #logger.info(f"✗ {category_name} - Eski haber: {article_data['title'][:50]}... ({article_data['published_date']})")
         
-        # Son 1 saat içindeki haberlere Google'ın orijinal sırasına göre rank ver
-        # filtered_articles zaten Google'ın RSS sırasına göre geldi
-        final_articles = []
-        for new_rank, article in enumerate(filtered_articles, 1):
-            article['rank'] = new_rank  # 1'den başlayarak rank ekle
-            final_articles.append(article)
-                
-        logger.info(f"{category_name}: {len(final_articles)} haber çekildi (son 1 saat, Google sırası korundu)")
-        return final_articles
+        logger.info(f"{category_name}: {len(filtered_articles)}/{len(all_articles)} haber son 1 saat içinde")
+        
+        
+        return filtered_articles
         
     except Exception as e:
         logger.error(f"Kategori hatası - {category_name}: {e}")
@@ -176,76 +196,90 @@ def scrape_category(category_name, rss_url):
 def lambda_handler(event, context):
     """
     AWS Lambda ana fonksiyonu. Tüm kategorileri işleyip S3'e kaydeder.
-    
-    Args:
-        event: Lambda event objesi
-        context: Lambda context objesi
-    
-    Returns:
-        dict: HTTP response formatında sonuç
     """
+    
     logger.info("Lambda başlatıldı")
+    
+    # Şu anki zamanı logla
+    now_utc = datetime.now(timezone.utc)
+    logger.info(f"Şu anki UTC zamanı: {now_utc}")
+    logger.info(f"1 saat önce: {now_utc - timedelta(hours=1)}")
     
     # Tüm kategorilerin verilerini toplayacak ana veri yapısı
     all_scraped_data = {
-        "scrape_timestamp_utc": datetime.utcnow().isoformat(),  # İşlem zamanı
+        "scrape_timestamp_utc": now_utc.isoformat(),
+        "filter_criteria": "Son 1 saat içindeki haberler",
         "categories": {}
     }
     
-    successful_categories = 0  # Başarılı kategori sayacı
+    successful_categories = 0
+    total_articles = 0
     
     # Her kategori için haberleri çek
     for category_name, rss_url in NEWS_CATEGORIES.items():
         articles = scrape_category(category_name, rss_url)
         all_scraped_data["categories"][category_name] = articles
         
-        # Eğer bu kategoriden haber geldiyse başarılı sayacını artır
+        article_count = len(articles)
+        total_articles += article_count
+        
         if articles:
             successful_categories += 1
+            logger.info(f"✓ {category_name}: {article_count} haber")
+        else:
+            logger.warning(f"✗ {category_name}: 0 haber")
     
-    logger.info(f"{successful_categories}/{len(NEWS_CATEGORIES)} kategori başarılı")
+    # Özet logla
+    logger.info(f"ÖZET: {successful_categories}/{len(NEWS_CATEGORIES)} kategori, toplam {total_articles} haber")
     
-    # En az bir kategori başarılıysa S3'e kaydet
-    if successful_categories > 0:
+    
+    try:
         # Dosya adı için timestamp oluştur
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_name = f"google_news_{timestamp}.json"
         
-        try:
-            # S3 bucket'ının var olup olmadığını kontrol et
-            s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
-            
-            # Veriyi JSON formatına çevir (Türkçe karakterleri koru)
-            json_data = json.dumps(all_scraped_data, indent=4, ensure_ascii=False)
-            
-            # S3'e yükle
-            s3_client.put_object(
-                Bucket=S3_BUCKET_NAME,
-                Key=file_name,
-                Body=json_data,
-                ContentType='application/json'
-            )
-            
-            logger.info(f"S3'e kaydedildi: {file_name}")
-            
-            # Başarılı response döndür
+        # S3 bucket'ının var olup olmadığını kontrol et
+        s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
+        
+        # Veriyi JSON formatına çevir (Türkçe karakterleri koru)
+        json_data = json.dumps(all_scraped_data, indent=2, ensure_ascii=False)
+        
+        # S3'e yükle
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=file_name,
+            Body=json_data,
+            ContentType='application/json; charset=utf-8'
+        )
+        
+        logger.info(f"S3'e kaydedildi: {file_name}")
+        
+        # Response
+        if total_articles > 0:
             return {
                 'statusCode': 200,
-                'body': json.dumps('Veriler başarıyla kaydedildi')
+                'body': json.dumps({
+                    'message': f'{total_articles} haber başarıyla kaydedildi',
+                    'categories': successful_categories,
+                    'file': file_name
+                }, ensure_ascii=False)
+            }
+        else:
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'Son 1 saatte haber bulunamadı',
+                    'categories_checked': len(NEWS_CATEGORIES),
+                    'file': file_name
+                }, ensure_ascii=False)
             }
             
-        except Exception as e:
-            logger.error(f"S3 hatası: {e}")
-            # S3 hatası durumunda 500 döndür
-            return {
-                'statusCode': 500,
-                'body': json.dumps('S3 yükleme hatası')
-            }
-    
-    else:
-        # Hiçbir kategoriden veri gelmedi
-        logger.warning("Hiçbir kategori çekilemedi")
+    except Exception as e:
+        logger.error(f"S3 hatası: {e}")
         return {
             'statusCode': 500,
-            'body': json.dumps('Veri çekilemedi')
+            'body': json.dumps({
+                'error': 'S3 yükleme hatası',
+                'details': str(e)
+            })
         }
