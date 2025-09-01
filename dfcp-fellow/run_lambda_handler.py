@@ -221,10 +221,10 @@ def scrape_category(category_name, rss_url):
             logger.info(f"RSS Feed: {channel_title.get_text(strip=True)}")
         
         # Tüm haber itemlarını al
-        items = soup.find_all('item')
-        logger.info(f"Toplam {len(items)} haber item'ı bulundu")
+        all_items = soup.find_all('item')
+        logger.info(f"Toplam {len(all_items)} haber item'ı bulundu")
         
-        if len(items) == 0:
+        if len(all_items) == 0:
             logger.warning("Hiç haber item'ı bulunamadı! RSS yapısını kontrol edin.")
             # İlk birkaç tag'i logla debug için
             
@@ -233,8 +233,8 @@ def scrape_category(category_name, rss_url):
         filtered_articles = []
         all_articles = []
         
-        for index, item in enumerate(items):
-            logger.info(f"\n--- Haber {index + 1}/{len(items)} ---")
+        for index, item in enumerate(all_items):
+            logger.info(f"\n--- Haber {index + 1}/{len(all_items)} ---")
             
             article_data = extract_article_data(item)
             if not article_data:
