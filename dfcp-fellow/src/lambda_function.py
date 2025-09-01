@@ -79,7 +79,7 @@ def extract_article_data(item):
     RSS item'ından haber verilerini çıkarır.
     """
     try:
-        # Haber başlığını çıkar
+        # Haber başlığını al
         title_element = item.find('title')
         if not title_element:
             return None
@@ -157,7 +157,7 @@ def scrape_category(category_name, rss_url):
         
         logger.info(f"{category_name} RSS response alındı, boyut: {len(response.content)} bytes")
         
-        # XML içeriğini BeautifulSoup ile parse et (html.parser Lambda'da varsayılan olarak mevcut)
+        # İçeriği BeautifulSoup'daki html.parser ile parse et
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Tüm haber itemlarını al
@@ -173,15 +173,14 @@ def scrape_category(category_name, rss_url):
             if not article_data:
                 continue
                 
-            all_articles.append(article_data)  
+            all_articles.append(article_data) # Debug için  
             
             # Son 1 saat kontrolü yap
             if is_within_last_hour(article_data['published_date']):
                 article_data['rank'] = len(filtered_articles) + 1  # Rank ekle
-                filtered_articles.append(article_data)
+                filtered_articles.append(article_data) #Son bir saatteki haberleri ekle
                 logger.info(f"✓ {category_name} - Son 1 saatte: {article_data['title'][:50]}...")
-            #else:
-                #logger.info(f"✗ {category_name} - Eski haber: {article_data['title'][:50]}... ({article_data['published_date']})")
+           
         
         logger.info(f"{category_name}: {len(filtered_articles)}/{len(all_articles)} haber son 1 saat içinde")
         
