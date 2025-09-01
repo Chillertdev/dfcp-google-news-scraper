@@ -161,14 +161,14 @@ def scrape_category(category_name, rss_url):
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Tüm haber itemlarını al
-        items = soup.find_all('item')
-        logger.info(f"{category_name} toplam {len(items)} haber bulundu")
+        all_items = soup.find_all('item')
+        logger.info(f"{category_name} toplam {len(all_items)} haber bulundu")
         
         # Son 1 saat içindeki haberleri topla
         filtered_articles = []
         all_articles = []  # Debug için tüm haberler
         
-        for index, item in enumerate(items):
+        for index, item in enumerate(all_items):
             article_data = extract_article_data(item)
             if not article_data:
                 continue

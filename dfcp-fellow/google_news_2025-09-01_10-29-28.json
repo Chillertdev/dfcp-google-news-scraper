@@ -1,0 +1,21 @@
+{
+  "scrape_timestamp_utc": "2025-09-01T07:29:19.539173+00:00",
+  "filter_criteria": "Son 1 saat içindeki haberler",
+  "categories": {
+    "dunya": [],
+    "spor": [],
+    "is": [],
+    "teknoloji": [],
+    "eglence": [
+      {
+        "title": "Denizde sohbet! Öykü Karayel oğlu Roman ile tatilde...",
+        "url": "CBMic0FVX3lxTE40YkJpOTJPRXZUZk5HX2dCOFBmeXVlVTNjSHJqQzRpQ1llcFBXc0gtbUFSS2pzLWpaaVo0Q3J4bUQ4eHZ4ZFhOVGxTWWhWN2tuU3l4LUswYlBrNGlBdU5MMEEyak5XN3FlZFIzNHlyWFVmLVk",
+        "short_description": "Denizde sohbet! Öykü Karayel oğlu Roman ile tatilde...HürriyetBütün kızlar toplandıkHürriyetDenizde sohbet... Ünlü oyuncular Çeşme'de buluştu!Ege'de Sonsöz",
+        "source": "Hürriyet",
+        "published_date": "Mon, 01 Sep 2025 06:51:11 GMT",
+        "rank": 1
+      }
+    ],
+    "saglik": []
+  }
+}
