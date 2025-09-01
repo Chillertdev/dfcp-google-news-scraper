@@ -201,7 +201,85 @@ def extract_article_data(item):
             'published_date': published_date
         }
 ```
+#### 4. Ana Lambda Handler Fonksiyonu
 
+```python
+def lambda_handler(event, context):
+    """
+    AWS Lambda ana fonksiyonu. EventBridge tarafından tetiklenir.
+    Tüm kategorilerdeki haberleri toplar ve S3'e kaydeder.
+    """
+    logger.info("Lambda başlatıldı")
+    
+    # Şu anki zamanı logla
+    now_utc = datetime.now(timezone.utc)
+    logger.info(f"Şu anki UTC zamanı: {now_utc}")
+    
+    # Ana veri yapısını hazırla
+    all_scraped_data = {
+        "scrape_timestamp_utc": now_utc.isoformat(), 
+        "filter_criteria": "Son 1 saat içindeki haberler",
+        "categories": {}
+    }
+    
+    successful_categories = 0
+    total_articles = 0
+    
+    # Her kategori için döngü
+    for category_name, rss_url in NEWS_CATEGORIES.items():
+        articles = scrape_category(category_name, rss_url)
+        all_scraped_data["categories"][category_name] = articles
+        
+        if articles:
+            successful_categories += 1
+            total_articles += len(articles)
+    
+    # S3'e kaydet
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f"google_news_{timestamp}.json"
+        
+        json_data = json.dumps(all_scraped_data, indent=2, ensure_ascii=False)
+        
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=file_name,
+            Body=json_data,
+            ContentType='application/json; charset=utf-8'
+        )
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': f'{total_articles} haber başarıyla kaydedildi',
+                'categories': successful_categories,
+                'file': file_name
+            }, ensure_ascii=False)
+        }
+    except Exception as e:
+        logger.error(f"S3 hatası: {e}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'error': 'S3 yükleme hatası'})
+        }
+```
+
+**Lambda Handler'ın İş Akışı:**
+
+1. **🚀 Başlatma**: EventBridge'den gelen tetikleyici ile çalışmaya başlar
+2. **⏰ Zaman Damgası**: İşlem başlangıç zamanını UTC'de kaydeder
+3. **📊 Veri Yapısı**: Tüm kategorilerin verilerini toplayacak ana JSON yapısını oluşturur
+4. **🔄 Kategori Döngüsü**: 6 kategori için teker teker `scrape_category()` fonksiyonunu çağırır
+5. **📈 İstatistik**: Başarılı kategori sayısı ve toplam haber sayısını hesaplar
+6. **💾 S3 Kayıt**: JSON verisini timestamp'li dosya adıyla S3'e yükler
+7. **📤 Response**: HTTP response döndürür (200 başarılı, 500 hatalı)
+
+**Handler Fonksiyonunun Kritik Özellikleri:**
+
+- **Error Handling**: S3 hatası durumunda sistem çökmez, hata mesajı döndürür
+- **Logging**: Her adımda detaylı log kaydı tutar (CloudWatch'da görünür)
+- **UTF-8 Support**: Türkçe karakterleri koruyarak JSON oluşturur (`ensure_ascii=False`)
+- **Timestamp**: Her dosya benzersiz isim alır (aynı anda çalışsa bile çakışmaz)
 ### 📰 Haber Kategorileri
 
 Google News RSS endpoint'leri:
